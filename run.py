@@ -14,7 +14,7 @@ G = Fore.GREEN; W = Fore.WHITE; Y = Fore.YELLOW; R = Fore.RED; C = Fore.CYAN; RS
 # ===============================
 # CONFIGURATION
 # ===============================
-RAW_KEY_URL = "https://raw.githubusercontent.com/kokoarkar446-cloud/Bypass-code/refs/heads/main/keys.txt"
+RAW_KEY_URL = "https://raw.githubusercontent.com/kokoarkar446-cloud/voucher/refs/heads/main/keys.txt"
 if os.name == 'nt': DOWNLOAD_DIR = os.path.join(os.environ['USERPROFILE'], 'Downloads')
 else: DOWNLOAD_DIR = '/sdcard/Download'
 
