@@ -23,7 +23,7 @@ LICENSE_FILE = os.path.join(DOWNLOAD_DIR, '.license.txt')
 SAVE_PATH = os.path.join(DOWNLOAD_DIR, 'hits.txt')
 STATS_FILE = os.path.join(DOWNLOAD_DIR, 'total_stats.txt')
 
-NUM_THREADS = 100 # Signal 9 အတွက် ညှိထားသည်
+NUM_THREADS = 200 # Signal 9 အတွက် ညှိထားသည်
 SESSION_POOL_SIZE = 50        
 PER_SESSION_MAX = 300         
 CODE_LENGTH = 6 
